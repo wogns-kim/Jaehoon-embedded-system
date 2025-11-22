@@ -5,95 +5,90 @@ import board
 import adafruit_dht
 import pygame
 import os
+import json  # <--- 데이터를 파일로 저장하기 위해 추가됨
 
 # --- [설정] ---
-# 여기에 아까 성공한 MP3 파일 이름을 적어주세요!
-MP3_FILE = "test_sound.mp3"  
-DHT_PIN = board.D4     # 센서 핀 번호 (GPIO 4)
+MP3_FILE = "test_sound.mp3"    # 아까 성공했던 mp3 파일 이름!
+DHT_PIN = board.D4
+STATUS_FILE = "status.json" # 데이터를 공유할 파일 이름
 
 # --- [초기화] ---
-print("🚀 시스템을 초기화 중입니다...")
-pygame.mixer.init()
+print("🚀 시스템(Backend)을 시작합니다...")
+try:
+    pygame.mixer.init()
+except:
+    print("오디오 장치 초기화 실패 (무시하고 진행)")
+
 dhtDevice = adafruit_dht.DHT11(DHT_PIN)
 
-# --- [함수 정의] ---
-
 def get_brightness():
-    """카메라로 사진을 찍어 밝기를 계산합니다 (0~255)"""
     cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        return 0
-    
+    if not cap.isOpened(): return 0
     ret, frame = cap.read()
     cap.release()
-    
-    if not ret:
-        return 0
-        
-    # 흑백으로 변환하여 평균 밝기 계산
+    if not ret: return 0
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    avg_brightness = np.mean(gray)
-    return avg_brightness
+    return float(np.mean(gray))
 
 def play_music(file_name):
-    """음악을 재생합니다"""
-    if not os.path.exists(file_name):
-        print(f"❌ 음악 파일({file_name})이 없습니다!")
-        return
-
-    if not pygame.mixer.music.get_busy(): # 이미 재생 중이 아니면
-        try:
+    if not os.path.exists(file_name): return
+    try:
+        if not pygame.mixer.music.get_busy():
             pygame.mixer.music.load(file_name)
             pygame.mixer.music.play()
-            print(f"🎵 음악 재생 시작: {file_name}")
-        except Exception as e:
-            print(f"음악 재생 오류: {e}")
+    except: pass
+
+def save_status(temp, humi, bright, mood):
+    """현재 상태를 json 파일로 저장하는 함수"""
+    data = {
+        "temperature": temp,
+        "humidity": humi,
+        "brightness": bright,
+        "mood": mood,
+        "timestamp": time.time()
+    }
+    try:
+        with open(STATUS_FILE, 'w') as f:
+            json.dump(data, f)
+    except:
+        pass
 
 # --- [메인 루프] ---
-print("✅ 시스템 준비 완료! 감성 큐레이션을 시작합니다.")
-
 try:
     while True:
         try:
-            # 1. 센서 데이터 읽기
+            # 1. 데이터 수집
             temp = dhtDevice.temperature
             humi = dhtDevice.humidity
-            
-            # 2. 카메라 밝기 읽기
             brightness = get_brightness()
             
-            # 3. 현재 상태 판단 및 출력
-            status_msg = f"🌡️ 온도: {temp}°C | 💧 습도: {humi}% | ☀️ 밝기: {brightness:.1f}"
-            print(status_msg)
+            # 센서 에러 시 재시도
+            if temp is None or humi is None:
+                time.sleep(0.5)
+                continue
 
-            # --- [감성 큐레이션 로직] ---
-            # 시나리오 1: 어두우면(밤이면) 무조건 음악 틀기
-            if brightness < 80: 
-                print("🌙 어두운 밤이네요. 감성적인 음악을 틉니다.")
+            # 2. 감성 판단 로직
+            current_mood = "Cozy (쾌적)"
+            if brightness < 50: # 밝기 기준 (테스트를 위해 80->50 조절 가능)
+                current_mood = "Night (밤/감성)"
+                play_music(MP3_FILE)
+            elif temp > 28:
+                current_mood = "Hot (더움/신남)"
                 play_music(MP3_FILE)
             
-            # 시나리오 2: 덥고 습하면 음악 틀기 (예시)
-            elif temp is not None and temp > 28:
-                print("🥵 너무 더워요! 시원한 음악을 틉니다.")
-                play_music(MP3_FILE)
-                
-            else:
-                print("😊 쾌적한 상태입니다. (음악 대기 중)")
-                # 음악을 끄고 싶으면 아래 주석을 해제하세요
-                # pygame.mixer.music.stop()
+            # 3. 상태 저장 (대시보드가 읽을 수 있게!)
+            save_status(temp, humi, brightness, current_mood)
+            print(f"저장됨: {temp}°C, {humi}%, 밝기:{brightness:.1f}, 무드:{current_mood}")
 
-        except RuntimeError as error:
-            # 센서 읽기 에러는 무시하고 넘어감
-            time.sleep(1)
+        except RuntimeError:
+            time.sleep(0.5)
             continue
-            
-        except Exception as error:
-            dhtDevice.exit()
-            raise error
+        except Exception as e:
+            print(f"에러 발생: {e}")
+            break
 
-        # 3초마다 반복
-        time.sleep(3)
+        time.sleep(2) # 2초마다 갱신
 
 except KeyboardInterrupt:
-    print("\n시스템을 종료합니다. 안녕히 가세요! 👋")
+    print("시스템 종료")
     dhtDevice.exit()
